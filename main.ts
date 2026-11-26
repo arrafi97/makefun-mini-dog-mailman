@@ -1,39 +1,91 @@
-// make.fun Mini entry: "The Dog Reviews the Mailman"
-// A tiny Node 22 program (standard library only, no network). It writes a
-// single funny line of at most 200 characters to <output>/entry.txt and
-// reports its length.
-import { mkdirSync, writeFileSync } from "node:fs";
+// The Dog Reviews the Mailman — a make.fun Mini entry.
+//
+// The brief asks for a review of the mailman, written by the dog. This
+// program builds that review out of named parts — a star rating, what the
+// mailman does right, the one unforgivable complaint, and the verdict —
+// then checks it against the bounty's gate and writes it to entry.txt.
+//
+// Node 22, standard library only, no network, no dependencies.
+import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
-// The joke: a five-star review written in the dog's voice. The mailman
-// is praised for the daily visit and the things to bark at, then docked
-// for the one unforgivable sin — never staying for a belly rub. The
-// "suspicious, but reliable" verdict is the dog holding a grudge politely,
-// which keeps the review in character to the last word.
-const LINE =
-  "Five stars for the mailman: he comes every day, brings me things to bark at, and has never once stayed for a belly rub. Suspicious, but reliable.";
+// The review, in the dog's own voice. Each part is a separate constant
+// so the review reads like a form the dog actually filled in: the rating
+// up front, praise for the daily visit and the things to bark at, then
+// the grudge — he has never once stayed for a belly rub — and a verdict
+// that forgives him anyway, suspiciously.
+const STARS = "Five stars for the mailman:";
+const PRAISE =
+  "he comes every day, brings me things to bark at, and has never once stayed for a belly rub.";
+const VERDICT = "Suspicious, but reliable.";
 
-// The bounty's gate: UTF-8 text, 1 to 200 characters, exactly one line,
-// and not blank. Count code points, not UTF-16 units, so the em dash
-// counts as one character.
-function checkLine(text: string): number {
-  const n = [...text].length;
-  if (text.trim() === "" || n < 1 || n > 200 || text.includes("\n")) {
-    throw new Error(`line must be one line of 1-200 characters, got ${n}`);
+const LINE = `${STARS} ${PRAISE} ${VERDICT}`;
+
+// Sanity check on the parts before anything else: each part must be
+// non-blank, and the assembled line must start with the rating and end
+// with the verdict. If a part were ever emptied by mistake, this fails
+// here instead of shipping a broken review.
+function verifyParts(): void {
+  for (const part of [STARS, PRAISE, VERDICT]) {
+    if (part.trim() === "") {
+      throw new Error("a review part must not be blank");
+    }
+  }
+  if (!LINE.startsWith(STARS) || !LINE.endsWith(VERDICT)) {
+    throw new Error("assembled review does not match its parts");
+  }
+}
+
+// The bounty's gate: UTF-8 text, exactly one line, 1–200 characters.
+// A single regular expression pins the shape (no newline characters,
+// length in code points handled separately), and the length check counts
+// Unicode code points, so multi-byte characters count as one each.
+const SINGLE_LINE = /^[^\r\n]{1,200}$/u;
+
+function measure(text: string): number {
+  return [...text].length;
+}
+
+function assertGate(text: string): number {
+  const n = measure(text);
+  if (text.trim() === "") {
+    throw new Error("review must not be blank");
+  }
+  if (!SINGLE_LINE.test(text)) {
+    throw new Error(`review must be one line of 1-200 characters, got ${n}`);
   }
   return n;
 }
 
-const chars = checkLine(LINE);
+// Where the sealed scorer looks: $MAKEFUN_OUTPUT_DIR when set, /output
+// otherwise. The directory is created if it is missing.
+function resolveEntryPath(): string {
+  const dir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+  mkdirSync(dir, { recursive: true });
+  return join(dir, "entry.txt");
+}
 
-// Write the line. The output directory comes from $MAKEFUN_OUTPUT_DIR
-// when set, otherwise /output. The file holds exactly the line — no
-// trailing newline — so two runs always produce byte-identical files.
-// A trailing newline would change the byte count, so there is none.
-// The sealed scorer reads this file directly, so nothing else may be
-// written into the output directory.
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-const outFile = join(outDir, "entry.txt");
-mkdirSync(outDir, { recursive: true });
-writeFileSync(outFile, LINE, "utf8");
-console.log(`wrote entry.txt (${chars} chars)`);
+// Write through a file descriptor so the exact byte count written can be
+// checked: the file must hold exactly the line, no trailing newline, so
+// two runs always produce byte-identical files.
+function emit(path: string, text: string): void {
+  const bytes = Buffer.from(text, "utf8");
+  const fd = openSync(path, "w");
+  try {
+    const written = writeSync(fd, bytes);
+    if (written !== bytes.length) {
+      throw new Error(`short write: ${written} of ${bytes.length} bytes`);
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+verifyParts();
+const chars = assertGate(LINE);
+const entryPath = resolveEntryPath();
+emit(entryPath, LINE);
+const bytes = Buffer.byteLength(LINE, "utf8");
+console.log(
+  `review written to entry.txt (${chars} chars, ${bytes} bytes) at ${entryPath}`,
+);
